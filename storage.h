@@ -2,6 +2,8 @@
 #include <memory>
 #include <string>
 
+#include <mongocxx/client.hpp>
+
 namespace Storage {
 
 namespace Mongo {

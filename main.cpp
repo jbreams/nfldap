@@ -1,13 +1,3 @@
-//
-// server.cpp
-// ~~~~~~~~~~
-//
-// Copyright (c) 2003-2013 Christopher M. Kohlhoff (chris at kohlhoff dot com)
-//
-// Distributed under the Boost Software License, Version 1.0. (See accompanying
-// file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
-//
-
 #include <ctime>
 #include <iostream>
 #include <string>
@@ -15,16 +5,6 @@
 #include <asio.hpp>
 #include <cctype>
 #include <utility>
-
-#include <bsoncxx/builder/basic/array.hpp>
-#include <bsoncxx/builder/basic/document.hpp>
-#include <bsoncxx/builder/basic/kvp.hpp>
-#include <bsoncxx/types.hpp>
-
-#include <mongocxx/client.hpp>
-#include <mongocxx/options/find.hpp>
-#include <mongocxx/instance.hpp>
-#include <mongocxx/uri.hpp>
 
 #include "ldapproto.h"
 #include "storage.h"

@@ -78,7 +78,8 @@ struct Packet {
     Packet(Tag _tag):
         Packet(Type::Primative, Class::Universal, static_cast<uint8_t>(_tag)) {};
 
-    static Packet decode(ByteVectorIt bytes, ByteVectorIt end);
+    static Packet decode(ByteVectorIt bytes, ByteVectorIt& end);
+    static Packet decode(uint8_t meta, ByteVector& reqBuffer);
 
     ~Packet() {};
 

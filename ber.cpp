@@ -201,7 +201,7 @@ void Packet::print(int indent) {
 
 #define BITMASK_ENUM(val, type) static_cast<type>(val & static_cast<int>(type::Bitmask))
 
-Packet Packet::decode(ByteVectorIt bytes, ByteVectorIt end) {
+Packet Packet::decode(ByteVectorIt bytes, ByteVectorIt& end) {
     // Get the metadata byte and advance the iterator
     uint8_t meta = *bytes++;
     uint8_t tag = meta & static_cast<int>(Tag::Bitmask);
@@ -221,18 +221,43 @@ Packet Packet::decode(ByteVectorIt bytes, ByteVectorIt end) {
         dataLen = realDataLen;
     }
 
-    //assert(bytes + dataLen <= end);
+    assert(bytes + dataLen <= end);
     end = bytes + dataLen;
     if (type == Type::Constructed) {
         ret = new Packet(type, berClass, tag);
         while(bytes < end) {
-            auto child = Packet::decode(bytes, end);
+            ByteVectorIt childEnd = end;
+            auto child = Packet::decode(bytes, childEnd);
             ret->appendChild(child);
-            bytes += child.length();
+            bytes = childEnd;
         }
     } else {
         ret = new Packet(type, berClass, tag, bytes, bytes + dataLen);
-        bytes += dataLen;
+    }
+
+    // Use a unique_ptr to cleanup ret ptr when it goes out of scope
+    std::unique_ptr<Packet> cleanup(ret);
+    return *ret;
+}
+
+Packet Packet::decode(uint8_t meta, ByteVector& reqBuffer) {
+    uint8_t tag = meta & static_cast<int>(Tag::Bitmask);
+    Class berClass = BITMASK_ENUM(meta, Class);
+    Type type = BITMASK_ENUM(meta, Type);
+
+    Packet* ret = nullptr;
+    if (type == Type::Constructed) {
+        ret = new Packet(type, berClass, tag);
+        auto bytes = reqBuffer.begin();
+        auto end = reqBuffer.end();
+        while(bytes < end) {
+            ByteVectorIt childEnd = end;
+            auto child = Packet::decode(bytes, childEnd);
+            ret->appendChild(child);
+            bytes = childEnd;
+        }
+    } else {
+        ret = new Packet(type, berClass, tag, reqBuffer.begin(), reqBuffer.end());
     }
 
     // Use a unique_ptr to cleanup ret ptr when it goes out of scope

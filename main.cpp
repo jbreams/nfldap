@@ -31,26 +31,40 @@ void session_thread(tcp::socket sock) {
         "dc=mongodb,dc=com"
     };
 
+    sock.set_option(tcp::no_delay(false));
     for (;;)
     {
-        std::vector<uint8_t> reqBuffer(1024);
+        std::vector<uint8_t> header(2);;
+        size_t length;
         asio::error_code error;
-        size_t length = sock.read_some(asio::buffer(reqBuffer), error);
-        if (error == asio::error::eof) {
-            std::cout << "peer closed the connection" << std::endl;
-            break; // Connection closed cleanly by peer.
-        } else if (error)
-            throw asio::system_error(error); // Some other error.
-        else if (length == 0)
-            continue;
 
-        auto reqIt = reqBuffer.begin();
-        auto ber = Ber::Packet::decode(reqIt, reqIt + length);
+        length = sock.read_some(asio::buffer(header), error);
+        if (error) {
+            if (error == asio::error::eof)
+                break;
+            else
+                throw asio::system_error(error);
+        }
+        assert(length == header.size());
+
+        std::vector<uint8_t> reqBuffer;
+        reqBuffer.reserve(1024);
+        if ((header[1] & 128) != 0) {
+            header[1] -= 128;
+            reqBuffer.resize(header[1]);
+            length = sock.read_some(asio::buffer(reqBuffer), error);
+            assert(length == reqBuffer.size());
+            auto decodedReqSize = Ber::decodeInteger(reqBuffer.cbegin(), reqBuffer.cend());
+            reqBuffer.resize(decodedReqSize, 0);
+        } else {
+            reqBuffer.resize(header[1], 0);
+        }
+        length = sock.read_some(asio::buffer(reqBuffer), error);
+        assert(length == reqBuffer.size());
+
+        auto ber = Ber::Packet::decode(header[0], reqBuffer);
         auto messageId = static_cast<uint64_t>(ber.children[0]);
         auto messageType = Ldap::MessageTag { static_cast<Ldap::MessageTag>(ber.children[1].tag) };
-
-        std::cout << "msg id: " << messageId << std::endl
-                  << "message type: " << static_cast<uint8_t>(messageType) << std::endl;
 
         if (messageType == Ldap::MessageTag::BindRequest) {
             Ldap::Bind::Request bindReq(ber.children[1]);
@@ -64,7 +78,6 @@ void session_thread(tcp::socket sock) {
             auto cursor = db.findEntries(searchReq);
 
             for (auto && entry: *cursor) {
-                std::cout << "Sending result for " << entry.dn << std::endl;
                 sendResponse(sock, messageId, Ldap::Search::generateResult(entry));
             }
 

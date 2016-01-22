@@ -31,7 +31,6 @@ void session_thread(tcp::socket sock) {
         "dc=mongodb,dc=com"
     };
 
-    sock.set_option(tcp::no_delay(false));
     for (;;)
     {
         std::vector<uint8_t> header(2);;

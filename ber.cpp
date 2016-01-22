@@ -95,23 +95,24 @@ Packet::Packet(Type _type, Class _class, uint8_t _tag, ByteVectorIt start, ByteV
     std::copy(start, end, std::back_inserter(data));
 }
 
-void encodeInteger(uint64_t val, ByteVector& out) {
-    bool found = false;
-    int shift = 56;
-    uint64_t mask = 0xFF00000000000000ULL;
+void encodeInteger(int64_t val, ByteVector& out) {
     out.reserve(sizeof(uint64_t));
+    uint8_t sign = 0;
+    uint64_t uintVal = val;
 
-    for (;mask > 0; mask >>= 8) {
-        if (!found && ((val & mask) != 0)) {
-            found = true;
-        }
-
-        if (found || (shift == 0)) {
-            out.push_back(static_cast<uint8_t>(((val & mask) >> shift)));
-        }
-
-        shift -= 8;
+    if (val < 0) {
+        sign = 0xff;
+        uintVal = ~uintVal;
     }
+
+    std::vector<uint8_t> tmpOut(sizeof(val));
+    auto curPos = tmpOut.end() - 1;
+    for (;curPos >= tmpOut.begin(); uintVal >>= 8) {
+        *curPos-- = ((sign ^ static_cast<uint8_t>(uintVal)) & 0xff);
+        if (uintVal < 0x80)
+            break;
+    }
+    std::copy(curPos + 1, tmpOut.end(), std::back_inserter(out));
 }
 
 size_t Packet::length() {
@@ -119,11 +120,12 @@ size_t Packet::length() {
 
     for (auto && c: children) {
         auto childLen = c.length();
-        auto encodedLen = 0;
-        for (auto x = childLen; x != 0; x >>= 8)
-            encodedLen++;
-        if (childLen > 127 || encodedLen > 1) {
-            ret += encodedLen;
+        if (childLen > 127) {
+            for (size_t uintChildLen = childLen; ; uintChildLen >>= 8) {
+                childLen++;
+                if (uintChildLen < 0x80)
+                    break;
+            }
         }
         ret += childLen;
     }
@@ -132,7 +134,6 @@ size_t Packet::length() {
 }
 
 void Packet::copyBytes(ByteVector& out, bool topLevel) {
-    ByteVector packetLen;
     const auto len = length();
     if (topLevel)
         out.reserve(len);
@@ -141,6 +142,8 @@ void Packet::copyBytes(ByteVector& out, bool topLevel) {
     metaByte |= static_cast<uint8_t>(berClass);
     metaByte |= static_cast<uint8_t>(tag);
     out.push_back(metaByte);
+
+    ByteVector packetLen;
     encodeInteger(len - 2, packetLen);
     if (len > 127 || packetLen.size() > 1) {
         out.push_back(static_cast<uint8_t>(packetLen.size() | 128));

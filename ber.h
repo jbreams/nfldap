@@ -55,7 +55,7 @@ using ByteVector = std::vector<uint8_t>;
 using ByteVectorIt = ByteVector::iterator;
 using ByteVectorCit = ByteVector::const_iterator;
 
-void encodeInteger(uint64_t val, ByteVector& out);
+void encodeInteger(int64_t val, ByteVector& out);
 uint64_t decodeInteger(ByteVectorCit begin, ByteVectorCit end);
 
 struct Packet {

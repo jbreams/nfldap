@@ -51,7 +51,10 @@ void session_thread(tcp::socket sock) {
             else
                 throw asio::system_error(error);
         }
-        assert(length == header.size());
+        if (length != header.size()) {
+            LOG_F(ERROR, "Client sent malformed BER header");
+            break;
+        }
 
         std::vector<uint8_t> reqBuffer;
         reqBuffer.reserve(1024);
@@ -59,14 +62,20 @@ void session_thread(tcp::socket sock) {
             header[1] -= 128;
             reqBuffer.resize(header[1]);
             length = sock.read_some(asio::buffer(reqBuffer), error);
-            assert(length == reqBuffer.size());
+            if (length != reqBuffer.size()) {
+                LOG_F(ERROR, "Client sent mal-formed BER size header");
+                break;
+            }
             auto decodedReqSize = Ber::decodeInteger(reqBuffer.cbegin(), reqBuffer.cend());
             reqBuffer.resize(decodedReqSize, 0);
         } else {
             reqBuffer.resize(header[1], 0);
         }
         length = sock.read_some(asio::buffer(reqBuffer), error);
-        assert(length == reqBuffer.size());
+        if (length != reqBuffer.size()) {
+            LOG_F(ERROR, "Client sent fewer bytes than expected");
+            break;
+        }
 
         auto ber = Ber::Packet::decode(header[0], reqBuffer);
         auto messageId = static_cast<uint64_t>(ber.children[0]);

@@ -1,10 +1,12 @@
 #include <algorithm>
-#include <cassert>
 #include <map>
 #include <iostream>
 #include <iomanip>
 
+#include "loguru.hpp"
+
 #include "ber.h"
+#include "exceptions.h"
 
 namespace Ber {
 
@@ -224,7 +226,10 @@ Packet Packet::decode(ByteVectorIt bytes, ByteVectorIt& end) {
         dataLen = realDataLen;
     }
 
-    assert(bytes + dataLen <= end);
+    if (bytes + dataLen > end) {
+        LOG_S(ERROR) << "End of BER packet is longer than the available bytes";
+        throw Ldap::Exception(Ldap::ErrorCode::protocolError);
+    }
     end = bytes + dataLen;
     if (type == Type::Constructed) {
         ret = new Packet(type, berClass, tag);

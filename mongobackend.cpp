@@ -42,8 +42,10 @@ std::list<std::string> dnToList(std::string dn) {
     {
         auto part = std::string{*dnIt};
         auto eqPos = part.find("=");
-        assert(eqPos != std::string::npos);
-        assert(part.size() > eqPos + 1);
+        if (eqPos == std::string::npos || part.size() <= eqPos + 1) {
+            LOG_S(ERROR) << "Error parsing DN for \"" << dn << "\'";
+            throw Ldap::Exception(Ldap::ErrorCode::invalidDNSyntax);
+        }
         auto varName = part.substr(0, eqPos);
         auto varValue = part.substr(eqPos + 1);
         boost::to_lower(varName);
@@ -278,7 +280,7 @@ void processFilter(Ldap::Search::Filter filter, sub_document & searchDoc) {
         case Type::Approx:
         case Type::Extensible:
             // TODO implement these!
-            assert(false);
+            throw Ldap::Exception(Ldap::ErrorCode::unavailableCriticalExtension);
             break;
     }
 }

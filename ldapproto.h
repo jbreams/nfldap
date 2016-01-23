@@ -53,8 +53,6 @@ namespace Ldap {
         std::string matchedDn,
         std::string errMsg,
         MessageTag tag);
-    template<typename T>
-    void assertTagMatches(T tagEnum, uint8_t tag);
 
 namespace Search {
 

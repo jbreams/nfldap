@@ -6,6 +6,10 @@
 #include <cctype>
 #include <utility>
 
+#include <pthread.h>
+
+#include "loguru.hpp"
+#include "exceptions.h"
 #include "ldapproto.h"
 #include "storage.h"
 
@@ -24,6 +28,9 @@ void sendResponse(tcp::socket& sock, uint64_t messageId, Ber::Packet response) {
 }
 
 void session_thread(tcp::socket sock) {
+    std::stringstream threadName;
+    threadName << sock.remote_endpoint();
+    loguru::set_thread_name(threadName.str().c_str());
     auto db = Storage::Mongo::MongoBackend{
         "mongodb://localhost",
         "directory",
@@ -65,41 +72,67 @@ void session_thread(tcp::socket sock) {
         auto messageId = static_cast<uint64_t>(ber.children[0]);
         auto messageType = Ldap::MessageTag { static_cast<Ldap::MessageTag>(ber.children[1].tag) };
 
-        if (messageType == Ldap::MessageTag::BindRequest) {
-            Ldap::Bind::Request bindReq(ber.children[1]);
-
-            Ldap::Bind::Response bindResp(Ldap::buildLdapResult(0, bindReq.dn, "",
-                        Ldap::MessageTag::BindResponse));
-            sendResponse(sock, messageId, bindResp.response);
+        Ldap::MessageTag errorResponseType;
+        switch (messageType) {
+        case Ldap::MessageTag::SearchRequest:
+            errorResponseType = Ldap::MessageTag::SearchResDone;
+            break;
+        default:
+            errorResponseType = static_cast<Ldap::MessageTag>(static_cast<uint8_t>(messageType) + 1);
+            break;
         }
-        else if(messageType == Ldap::MessageTag::SearchRequest) {
-            Ldap::Search::Request searchReq(ber.children[1]);
-            auto cursor = db.findEntries(searchReq);
+        try {
+            if (messageType == Ldap::MessageTag::BindRequest) {
+                Ldap::Bind::Request bindReq(ber.children[1]);
 
-            for (auto && entry: *cursor) {
-                sendResponse(sock, messageId, Ldap::Search::generateResult(entry));
+                Ldap::Bind::Response bindResp(Ldap::buildLdapResult(0, bindReq.dn, "",
+                            Ldap::MessageTag::BindResponse));
+                sendResponse(sock, messageId, bindResp.response);
             }
+            else if (messageType == Ldap::MessageTag::SearchRequest) {
+                Ldap::Search::Request searchReq(ber.children[1]);
+                auto cursor = db.findEntries(searchReq);
 
-            sendResponse(sock, messageId,
-                Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::SearchResDone));
-        }
-        else if(messageType == Ldap::MessageTag::AddRequest) {
-            Ldap::Entry entry = Ldap::Add::parseRequest(ber.children[1]);
-            db.saveEntry(entry);
-            sendResponse(sock, messageId,
-                Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::AddResponse));
-        }
-        else if(messageType == Ldap::MessageTag::DelRequest) {
-            std::string dn = Ldap::Delete::parseRequest(ber.children[1]);
-            db.deleteEntry(dn);
-            sendResponse(sock, messageId,
-                Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::DelResponse));
+                for (auto && entry: *cursor) {
+                    sendResponse(sock, messageId, Ldap::Search::generateResult(entry));
+                }
+
+                sendResponse(sock, messageId,
+                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::SearchResDone));
+            }
+            else if (messageType == Ldap::MessageTag::AddRequest) {
+                Ldap::Entry entry = Ldap::Add::parseRequest(ber.children[1]);
+                db.saveEntry(entry, true);
+                sendResponse(sock, messageId,
+                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::AddResponse));
+            }
+            else if (messageType == Ldap::MessageTag::DelRequest) {
+                std::string dn = Ldap::Delete::parseRequest(ber.children[1]);
+                db.deleteEntry(dn);
+                sendResponse(sock, messageId,
+                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::DelResponse));
+            }
+        } catch (const Ldap::Exception& e) {
+            auto resPacket = Ldap::buildLdapResult(e, "", e.what(), errorResponseType);
+            sendResponse(sock, messageId, resPacket);
+            break;
+        } catch (const std::exception& e) {
+            auto resPacket = Ldap::buildLdapResult(static_cast<int>(Ldap::ErrorCode::other),
+                "", e.what(), errorResponseType);
+            sendResponse(sock, messageId, resPacket);
+            break;
+        } catch (...) {
+            auto resPacket = Ldap::buildLdapResult(static_cast<int>(Ldap::ErrorCode::other),
+                "", "Unknown error occurred", errorResponseType);
+            sendResponse(sock, messageId, resPacket);
+            break;
         }
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    loguru::init(argc, argv);
     try
     {
         asio::io_service io_service;
@@ -110,7 +143,6 @@ int main()
         {
             tcp::socket socket(io_service);
             acceptor.accept(socket);
-
             std::thread(session_thread, std::move(socket)).detach();
         }
     }

@@ -9,6 +9,7 @@
 #include <mongocxx/client.hpp>
 #include <mongocxx/instance.hpp>
 #include <mongocxx/uri.hpp>
+#include <mongocxx/exception/exception.hpp>
 
 #include <bsoncxx/builder/basic/array.hpp>
 #include <bsoncxx/builder/basic/document.hpp>
@@ -16,6 +17,9 @@
 #include <bsoncxx/types.hpp>
 #include <bsoncxx/json.hpp>
 
+#include "loguru.hpp"
+
+#include "exceptions.h"
 #include "ldapproto.h"
 #include "storage.h"
 
@@ -65,7 +69,13 @@ MongoCursor::iterator& MongoCursor::iterator::operator++() {
 }
 
 void MongoCursor::iterator::refreshDocument() {
-    auto resultDoc = *_cursorIt;
+    bsoncxx::document::view resultDoc;
+    try {
+        resultDoc = *_cursorIt;
+    } catch (const mongocxx::exception& e) {
+        LOG_S(ERROR) << "Error fetching next document: " << e.what();
+        throw Ldap::Exception(Ldap::ErrorCode::operationsError);
+    }
     std::string dn{ resultDoc["_id"].get_utf8().value };
     dn = dnPartsToId(dnToList(dn));
     curEntry = Ldap::Entry { dn };
@@ -95,11 +105,21 @@ void MongoCursor::iterator::refreshDocument() {
 }
 
 MongoCursor::iterator MongoCursor::begin() {
-    return iterator{_cursor.begin()};
+    try {
+        return iterator{_cursor.begin()};
+    } catch (const mongocxx::exception& e) {
+        LOG_S(ERROR) << "Error getting beginning of search results: " << e.what();
+        throw Ldap::Exception(Ldap::ErrorCode::operationsError, e.what());
+    }
 }
 
 MongoCursor::iterator MongoCursor::end() {
-    return iterator{_cursor.end()};
+    try {
+        return iterator{_cursor.end()};
+    } catch (const mongocxx::exception& e) {
+        LOG_S(ERROR) << "Error getting end of search results: " << e.what();
+        throw Ldap::Exception(Ldap::ErrorCode::operationsError, e.what());
+    }
 }
 
 MongoBackend::MongoBackend(
@@ -113,14 +133,10 @@ MongoBackend::MongoBackend(
     _rootdn { rootDN }
 {}
 
-void MongoBackend::saveEntry(Ldap::Entry e) {
+void MongoBackend::saveEntry(Ldap::Entry e, bool insert) {
     std::string dnId = dnPartsToId(dnToList(e.dn));
-    auto opts = mongocxx::options::update();
 
-    auto filterDoc = document{};
     auto updateDoc = document{};
-
-    filterDoc.append(kvp("_id", dnId));
     updateDoc.append(kvp("_id", dnId));
 
     for (auto && attr: e.attributes) {
@@ -136,17 +152,38 @@ void MongoBackend::saveEntry(Ldap::Entry e) {
         }
     }
 
-    opts.upsert(true);
-    _collection.replace_one(filterDoc.view(), updateDoc.view(), opts);
+    try {
+        if (insert) {
+            _collection.insert_one(updateDoc.view());
+        } else {
+            auto opts = mongocxx::options::update();
+            opts.upsert(true);
+
+            auto filterDoc = document{};
+            filterDoc.append(kvp("_id", dnId));
+
+            _collection.replace_one(filterDoc.view(), updateDoc.view(), opts);
+        }
+    } catch (const mongocxx::exception) {
+        LOG_S(ERROR) << "Error " << (insert ? "inserting" : "updating") << " document for "
+            << "dn " << e.dn;
+        throw Ldap::Exception(Ldap::ErrorCode::operationsError);
+    }
 }
 
 std::unique_ptr<Ldap::Entry> MongoBackend::findEntry(std::string dn) {
     auto e = std::unique_ptr<Ldap::Entry>{new Ldap::Entry{dn}};
     auto searchDoc = document{};
     searchDoc.append(kvp("_id", dnPartsToId(dnToList(dn))));
-    auto resultDoc = _collection.find_one(searchDoc.view());
+    mongocxx::stdx::optional<bsoncxx::document::value> resultDoc;
+    try {
+        resultDoc = _collection.find_one(searchDoc.view());
+    } catch (const mongocxx::exception& e) {
+        LOG_S(ERROR) << "Error finding " << dn << ": " << e.what();
+        throw Ldap::Exception(Ldap::ErrorCode::operationsError);
+    }
     if (!resultDoc)
-        return nullptr;
+        throw Ldap::Exception(Ldap::ErrorCode::noSuchObject);
 
     for (bsoncxx::document::element el: resultDoc->view()) {
         // We've already parsed the _id above
@@ -289,16 +326,26 @@ std::unique_ptr<MongoCursor> MongoBackend::findEntries(Ldap::Search::Request req
         opts.projection(projection.extract());
     }
 
+    LOG_S(INFO) << "Executing search for " << bsoncxx::to_json(searchDocument);
+
     auto view = searchDocument.view();
-    std::cout << bsoncxx::to_json(view);
     auto cursor = _collection.find(view, opts);
     return std::unique_ptr<MongoCursor>(new MongoCursor{ std::move(cursor) });
 }
 
 void MongoBackend::deleteEntry(std::string dn) {
     auto searchDoc = document{};
-    searchDoc.append(kvp("_id", dnPartsToId(dnToList(dn))));
-    _collection.delete_one(searchDoc.view());
+    std::stringstream regexBuf;
+
+    regexBuf << "^" << dnPartsToId(dnToList(dn)) << ",?.+";
+
+    searchDoc.append(kvp("_id", bsoncxx::types::b_regex{ regexBuf.str(), "" }));
+    try {
+        _collection.delete_many(searchDoc.view());
+    } catch (const mongocxx::exception& e) {
+        LOG_S(ERROR) << "Error deleting sub-tree " << dn << ": " << e.what();
+        throw Ldap::Exception(Ldap::ErrorCode::operationsError, e.what());
+    }
 }
 
 } // namespace Mongo

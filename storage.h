@@ -68,7 +68,7 @@ public:
     MongoBackend(const MongoBackend&) = default;
     MongoBackend(MongoBackend&&) = default;
 
-    void saveEntry(Ldap::Entry e);
+    void saveEntry(Ldap::Entry e, bool insert);
     std::unique_ptr<Ldap::Entry> findEntry(std::string dn);
     std::unique_ptr<MongoCursor> findEntries(Ldap::Search::Request req);
     void deleteEntry(std::string dn);

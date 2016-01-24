@@ -86,6 +86,24 @@ namespace Search {
 
 } // namespace Search
 
+namespace Modify {
+
+    struct Modification {
+        Modification(const Ber::Packet p);
+        enum class Type { Add, Delete, Replace } type;
+        std::vector<std::string> values;
+        std::string name;
+    };
+
+    struct Request {
+        std::string dn;
+        std::vector<Modification> mods;
+
+        Request(const Ber::Packet p);
+    };
+
+} //namespace Modify
+
 namespace Bind {
 
     struct Request {

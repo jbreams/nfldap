@@ -5,6 +5,7 @@
 #include <asio.hpp>
 #include <cctype>
 #include <utility>
+#include <set>
 
 #include <pthread.h>
 
@@ -102,7 +103,7 @@ void session_thread(tcp::socket sock) {
                 Ldap::Search::Request searchReq(ber.children[1]);
                 auto cursor = db.findEntries(searchReq);
 
-                for (auto && entry: *cursor) {
+                for (const auto& entry: *cursor) {
                     sendResponse(sock, messageId, Ldap::Search::generateResult(entry));
                 }
 
@@ -114,6 +115,55 @@ void session_thread(tcp::socket sock) {
                 db.saveEntry(entry, true);
                 sendResponse(sock, messageId,
                     Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::AddResponse));
+            }
+            else if (messageType == Ldap::MessageTag::ModifyRequest) {
+                Ldap::Modify::Request req(ber.children[1]);
+                auto entry = db.findEntry(req.dn);
+                if (entry == nullptr) {
+                    throw Ldap::Exception(Ldap::ErrorCode::noSuchObject);
+                }
+                for (const auto& mod: req.mods) {
+                    using ModType = Ldap::Modify::Modification::Type;
+                    switch(mod.type) {
+                    case ModType::Add:
+                        for (const auto& v: mod.values) {
+                            entry->appendValue(mod.name, v);
+                        }
+                        break;
+                    case ModType::Delete:
+                        if (mod.values.size() == 0) {
+                            if (entry->attributes.erase(mod.name) == 0) {
+                                throw Ldap::Exception(Ldap::ErrorCode::noSuchAttribute);
+                            }
+                        } else {
+                            try {
+                                auto curVals = entry->attributes.at(mod.name);
+                                std::set<std::string> finalVals(curVals.begin(), curVals.end());
+                                for (const auto& v: mod.values) {
+                                    if (finalVals.erase(v) == 0) {
+                                        throw Ldap::Exception(Ldap::ErrorCode::noSuchAttribute);
+                                    }
+                                }
+                                curVals.clear();
+                                std::copy(finalVals.begin(), finalVals.end(),
+                                    std::back_inserter(curVals));
+                            } catch(std::out_of_range) {
+                                throw Ldap::Exception(Ldap::ErrorCode::noSuchAttribute);
+                            }
+                        }
+                        break;
+                    case ModType::Replace:
+                        if (mod.values.size() == 0) {
+                            entry->attributes.erase(mod.name);
+                        } else {
+                            entry->attributes[mod.name] = mod.values;
+                        }
+                        break;
+                    }
+                }
+                db.saveEntry(*entry, false);
+                sendResponse(sock, messageId,
+                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::ModifyResponse));
             }
             else if (messageType == Ldap::MessageTag::DelRequest) {
                 std::string dn = Ldap::Delete::parseRequest(ber.children[1]);

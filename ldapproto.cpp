@@ -71,7 +71,7 @@ Filter parseFilter(const Ber::Packet& p) {
     case Filter::Type::And:
     case Filter::Type::Or:
         checkProtocolError(p.children.size() >= 2);
-        for (auto && c: p.children) {
+        for (const auto& c: p.children) {
             ret.children.push_back(parseFilter(c));
         }
         break;
@@ -82,7 +82,7 @@ Filter parseFilter(const Ber::Packet& p) {
     case Filter::Type::Sub:
         checkProtocolError(p.children.size() == 2);
         ret.attributeName = std::string(p.children[0]);
-        for (auto && c: p.children[1].children) {
+        for (const auto& c: p.children[1].children) {
             SubFilter sf {
                 static_cast<SubFilter::Type>(c.tag),
                 std::string(c)
@@ -137,10 +137,9 @@ Request::Request(const Ber::Packet p) {
     filter = parseFilter(p.children[6]);
 
     checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, p.children[7].tag);
-    for (auto & a: p.children[7].children) {
+    for (const auto& a: p.children[7].children) {
         checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, a.tag);
-        std::string attr(a);
-        attributes.push_back(attr);
+        attributes.emplace_back(static_cast<std::string>(a));
     }
 }
 
@@ -150,11 +149,11 @@ Ber::Packet generateResult(const Ldap::Entry& entry) {
     response.appendChild(Ber::Packet(Ber::Tag::OctetString, entry.dn));
 
     Ber::Packet attrRoot(Ber::Type::Constructed, Ber::Class::Universal, Ber::Tag::Sequence);
-    for (auto const & attr: entry.attributes) {
+    for (const auto& attr: entry.attributes) {
         Ber::Packet attrPacket(Ber::Type::Constructed, Ber::Class::Universal, Ber::Tag::Sequence);
         attrPacket.appendChild(Ber::Packet(Ber::Tag::OctetString, attr.first));
         Ber::Packet attrValues(Ber::Type::Constructed, Ber::Class::Universal, Ber::Tag::Set);
-        for (auto && val: attr.second) {
+        for (const auto& val: attr.second) {
             Ber::Packet valPacket(Ber::Tag::OctetString, val);
             attrValues.appendChild(valPacket);
         }
@@ -175,11 +174,11 @@ Entry parseRequest(Ber::Packet p) {
 
     Ber::Packet attrs = p.children[1];
     checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, attrs.tag);
-    for (auto attrSeq: attrs.children) {
+    for (const auto& attrSeq: attrs.children) {
         checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, attrSeq.tag);
         checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, attrSeq.children[0].tag);
         checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Set, attrSeq.children[1].tag);
-        for (auto attrVal: attrSeq.children[1].children) {
+        for (const auto& attrVal: attrSeq.children[1].children) {
             checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, attrVal.tag);
             ret.appendValue(attrSeq.children[0], attrVal);
         }
@@ -194,5 +193,46 @@ std::string parseRequest(Ber::Packet p) {
     checkProtocolErrorTagMatches<Ldap::MessageTag>(Ldap::MessageTag::DelRequest, p.tag);
     return static_cast<std::string>(p);
 }
+
+} // namespace delete
+
+namespace Modify {
+Modification::Modification(const Ber::Packet p) {
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, p.tag);
+    checkProtocolError(p.children.size() == 2);
+
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Enumerated, p.children[0].tag);
+    type = static_cast<Type>(static_cast<uint64_t>(p.children[0]));
+
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, p.children[1].tag);
+    auto partialAttr = p.children[1];
+    checkProtocolError(partialAttr.children.size() == 2);
+
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, partialAttr.children[0].tag);
+    name = static_cast<std::string>(partialAttr.children[0]);
+
+    auto attrList = partialAttr.children[1];
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Set, attrList.tag);
+    for (const auto& val: attrList.children) {
+        checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, val.tag);
+        values.push_back(static_cast<std::string>(val));
+    }
 }
+
+Request::Request(const Ber::Packet p) {
+    checkProtocolErrorTagMatches<Ldap::MessageTag>(Ldap::MessageTag::ModifyRequest, p.tag);
+    checkProtocolError(p.children.size() == 2);
+
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, p.children[0].tag);
+    dn = static_cast<std::string>(p.children[0]);
+
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, p.children[1].tag);
+    for (const auto& modPacket: p.children[1].children) {
+        mods.emplace_back(modPacket);
+    }
+
+}
+
+} //namespace modif
+
 } // namespace ldap

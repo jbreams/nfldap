@@ -49,7 +49,7 @@ namespace Ldap {
     };
 
     Ber::Packet buildLdapResult(
-        int code,
+        Ldap::ErrorCode code,
         std::string matchedDn,
         std::string errMsg,
         MessageTag tag);
@@ -115,7 +115,7 @@ namespace Bind {
 
         enum class Type { Simple = 0, Sasl = 3 } type;
 
-        Request(const Ber::Packet p);
+        Request(const Ber::Packet& p);
     };
 
     struct Response {

@@ -7,14 +7,17 @@
 #include <utility>
 #include <set>
 
+#include <yaml-cpp/yaml.h>
 #include <pthread.h>
 
 #include "loguru.hpp"
 #include "exceptions.h"
 #include "ldapproto.h"
 #include "storage.h"
+#include "passwords.h"
 
 using asio::ip::tcp;
+YAML::Node config;
 
 void sendResponse(tcp::socket& sock, uint64_t messageId, Ber::Packet response) {
     Ber::Packet envelope(
@@ -38,6 +41,17 @@ void session_thread(tcp::socket sock) {
         "rootdn",
         "dc=mongodb,dc=com"
     };
+
+    bool noAuthentication = false;
+    // Put this into its own scope so the YAML nodes get cleaned up.
+    {
+        auto check = config["noAuthentication"];
+        if (check && check.as<bool>() == true)
+            noAuthentication = true;
+    }
+
+    bool userBound = false;
+    std::string userBoundDN;
 
     for (;;)
     {
@@ -94,8 +108,48 @@ void session_thread(tcp::socket sock) {
         try {
             if (messageType == Ldap::MessageTag::BindRequest) {
                 Ldap::Bind::Request bindReq(ber.children[1]);
+                if (bindReq.type == Ldap::Bind::Request::Type::Sasl) {
+                // TODO SUPPORT SASL BINDS!
+                    throw Ldap::Exception(Ldap::ErrorCode::authMethodNotSupported);
+                }
 
-                Ldap::Bind::Response bindResp(Ldap::buildLdapResult(0, bindReq.dn, "",
+                bool passOkay = false;
+                if (noAuthentication) {
+                    LOG_S(INFO)
+                        << "Authentication is disabled, sending bogus bind for "
+                        << bindReq.dn;
+                    passOkay = true;
+                } else {
+                    LOG_S(INFO) << "Authenticating " << bindReq.dn;
+                    try {
+                        auto entry = db.findEntry(bindReq.dn);
+                        for (const auto& pass: entry->attributes.at("userPassword")) {
+                            passOkay = Password::checkPassword(bindReq.simple, pass);
+                            if (passOkay)
+                                break;
+                        }
+
+                    } catch (Ldap::Exception e) {
+                        LOG_S(ERROR) << "Error during authentication " << e.what();
+                        if (e == Ldap::ErrorCode::noSuchObject) {
+                            throw Ldap::Exception(Ldap::ErrorCode::invalidCredentials);
+                        }
+                        throw;
+                    }
+                }
+
+                Ldap::ErrorCode respCode;
+                if (passOkay) {
+                    respCode = Ldap::ErrorCode::success;
+                    userBound = true;
+                    userBoundDN = bindReq.dn;
+                } else {
+                    respCode = Ldap::ErrorCode::invalidCredentials;
+                    userBound = false;
+                    userBoundDN = "";
+                }
+
+                Ldap::Bind::Response bindResp(Ldap::buildLdapResult(respCode, bindReq.dn, "",
                             Ldap::MessageTag::BindResponse));
                 sendResponse(sock, messageId, bindResp.response);
             }
@@ -108,13 +162,15 @@ void session_thread(tcp::socket sock) {
                 }
 
                 sendResponse(sock, messageId,
-                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::SearchResDone));
+                    Ldap::buildLdapResult(Ldap::ErrorCode::success,
+                        "", "", Ldap::MessageTag::SearchResDone));
             }
             else if (messageType == Ldap::MessageTag::AddRequest) {
                 Ldap::Entry entry = Ldap::Add::parseRequest(ber.children[1]);
                 db.saveEntry(entry, true);
                 sendResponse(sock, messageId,
-                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::AddResponse));
+                    Ldap::buildLdapResult(Ldap::ErrorCode::success,
+                        "", "", Ldap::MessageTag::AddResponse));
             }
             else if (messageType == Ldap::MessageTag::ModifyRequest) {
                 Ldap::Modify::Request req(ber.children[1]);
@@ -163,25 +219,27 @@ void session_thread(tcp::socket sock) {
                 }
                 db.saveEntry(*entry, false);
                 sendResponse(sock, messageId,
-                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::ModifyResponse));
+                    Ldap::buildLdapResult(Ldap::ErrorCode::success,
+                        "", "", Ldap::MessageTag::ModifyResponse));
             }
             else if (messageType == Ldap::MessageTag::DelRequest) {
                 std::string dn = Ldap::Delete::parseRequest(ber.children[1]);
                 db.deleteEntry(dn);
                 sendResponse(sock, messageId,
-                    Ldap::buildLdapResult(0, "", "", Ldap::MessageTag::DelResponse));
+                    Ldap::buildLdapResult(Ldap::ErrorCode::success,
+                        "", "", Ldap::MessageTag::DelResponse));
             }
         } catch (const Ldap::Exception& e) {
             auto resPacket = Ldap::buildLdapResult(e, "", e.what(), errorResponseType);
             sendResponse(sock, messageId, resPacket);
             break;
         } catch (const std::exception& e) {
-            auto resPacket = Ldap::buildLdapResult(static_cast<int>(Ldap::ErrorCode::other),
+            auto resPacket = Ldap::buildLdapResult(Ldap::ErrorCode::other,
                 "", e.what(), errorResponseType);
             sendResponse(sock, messageId, resPacket);
             break;
         } catch (...) {
-            auto resPacket = Ldap::buildLdapResult(static_cast<int>(Ldap::ErrorCode::other),
+            auto resPacket = Ldap::buildLdapResult(Ldap::ErrorCode::other,
                 "", "Unknown error occurred", errorResponseType);
             sendResponse(sock, messageId, resPacket);
             break;
@@ -194,9 +252,14 @@ int main(int argc, char** argv)
     loguru::init(argc, argv);
     try
     {
+        config = YAML::LoadFile(argv[1]);
         asio::io_service io_service;
 
-        tcp::acceptor acceptor(io_service, tcp::endpoint(tcp::v4(), 3890));
+        int port = 3890;
+        if (config["port"]) {
+            port = config["port"].as<int>();
+        }
+        tcp::acceptor acceptor(io_service, tcp::endpoint(tcp::v4(), port));
 
         for (;;)
         {

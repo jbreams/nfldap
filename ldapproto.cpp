@@ -1,9 +1,13 @@
+#include "exceptions.h"
 #include "ldapproto.h"
 
-#include "exceptions.h"
-
 namespace Ldap {
-Ber::Packet buildLdapResult(int code, std::string matchedDn, std::string errMsg, MessageTag tag) {
+Ber::Packet buildLdapResult(
+        Ldap::ErrorCode code,
+        std::string matchedDn,
+        std::string errMsg,
+        MessageTag tag)
+{
     Ber::Packet response(Ber::Type::Constructed, Ber::Class::Application,
         static_cast<uint8_t>(tag));
     response.appendChild(Ber::Packet(Ber::Tag::Enumerated, static_cast<uint64_t>(code)));
@@ -30,23 +34,26 @@ void Entry::appendValue(std::string name, std::string value) {
 
 namespace Bind {
 
-Request::Request(const Ber::Packet p) {
+Request::Request(const Ber::Packet& p) {
+    checkProtocolErrorTagMatches<Ldap::MessageTag>(Ldap::MessageTag::BindRequest, p.tag);
     checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Integer, p.children[0].tag);
     version = p.children[0];
 
     checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, p.children[1].tag);
     dn = std::string(p.children[1]);
 
-    type = static_cast<Type>(static_cast<int>(p.children[2]));
+    auto creds = p.children[2];
+    type = static_cast<Type>(creds.tag);
     checkProtocolError(type == Type::Simple || type == Type::Sasl);
     if (type == Type::Simple) {
-        if (p.children.size() == 4)
-            simple = std::string(p.children[3]);
+        simple = std::string(creds);
     } else if (type == Type::Sasl) {
-        if (p.children.size() == 6) {
-            saslMech = std::string(p.children[3]);
-            saslCredentials = p.children[4].data;
-        }
+        checkProtocolError(creds.children.size() == 1);
+        auto saslCreds = creds.children[0];
+        checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, saslCreds.tag);
+        checkProtocolError(creds.children.size() == 2);
+        saslMech = std::string(saslCreds.children[0]);
+        saslCredentials = saslCreds.children[1].data;
     }
 }
 

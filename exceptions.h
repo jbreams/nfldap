@@ -59,6 +59,10 @@ public:
         return static_cast<int>(_code);
     };
 
+    operator ErrorCode() const {
+        return _code;
+    }
+
 private:
     ErrorCode _code;
     const std::string _what;

@@ -83,10 +83,12 @@ flags = [
 './tests/gmock/include',
 ]
 
-mongocxx_flags = subprocess.check_output(
-    ["/usr/bin/pkg-config", "--libs", "--cflags", "libmongocxx"])
-flags += mongocxx_flags.split()
+def get_flags(lib):
+    return subprocess.check_output(
+        ["/usr/bin/pkg-config", "--libs", "--cflags", lib]).split()
 
+flags += get_flags('libmongocxx')
+flags += get_flags('openssl')
 
 # Set this to the absolute path to the folder (NOT the file!) containing the
 # compile_commands.json file to use that instead of 'flags'. See here for

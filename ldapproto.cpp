@@ -32,43 +32,6 @@ void Entry::appendValue(std::string name, std::string value) {
     attributes[name].push_back(value);
 }
 
-namespace Bind {
-
-Request::Request(const Ber::Packet& p) {
-    checkProtocolErrorTagMatches<Ldap::MessageTag>(Ldap::MessageTag::BindRequest, p.tag);
-    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Integer, p.children[0].tag);
-    version = p.children[0];
-
-    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, p.children[1].tag);
-    dn = std::string(p.children[1]);
-
-    auto creds = p.children[2];
-    type = static_cast<Type>(creds.tag);
-    checkProtocolError(type == Type::Simple || type == Type::Sasl);
-    if (type == Type::Simple) {
-        simple = std::string(creds);
-    } else if (type == Type::Sasl) {
-        checkProtocolError(creds.children.size() == 1);
-        auto saslCreds = creds.children[0];
-        checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, saslCreds.tag);
-        checkProtocolError(creds.children.size() == 2);
-        saslMech = std::string(saslCreds.children[0]);
-        saslCredentials = saslCreds.children[1].data;
-    }
-}
-
-Response::Response(Ber::Packet result):
-    response(result)
-{ }
-
-void Response::appendSaslResponse(std::vector<uint8_t> resp) {
-    Ber::Packet saslData(Ber::Tag::OctetString, resp.begin(), resp.end());
-    response.appendChild(saslData);
-}
-
-} // namespace bind
-
-namespace Search {
 Filter parseFilter(const Ber::Packet& p) {
     Filter ret;
     checkProtocolErrorTagRange<Filter::Type>(Filter::Type::And, Filter::Type::Extensible, p.tag);
@@ -115,6 +78,44 @@ Filter parseFilter(const Ber::Packet& p) {
     return ret;
 }
 
+namespace Bind {
+
+Request::Request(const Ber::Packet& p) {
+    checkProtocolErrorTagMatches<Ldap::MessageTag>(Ldap::MessageTag::BindRequest, p.tag);
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Integer, p.children[0].tag);
+    version = p.children[0];
+
+    checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::OctetString, p.children[1].tag);
+    dn = std::string(p.children[1]);
+
+    auto creds = p.children[2];
+    type = static_cast<Type>(creds.tag);
+    checkProtocolError(type == Type::Simple || type == Type::Sasl);
+    if (type == Type::Simple) {
+        simple = std::string(creds);
+    } else if (type == Type::Sasl) {
+        checkProtocolError(creds.children.size() == 1);
+        auto saslCreds = creds.children[0];
+        checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, saslCreds.tag);
+        checkProtocolError(creds.children.size() == 2);
+        saslMech = std::string(saslCreds.children[0]);
+        saslCredentials = saslCreds.children[1].data;
+    }
+}
+
+Response::Response(Ber::Packet result):
+    response(result)
+{ }
+
+void Response::appendSaslResponse(std::vector<uint8_t> resp) {
+    Ber::Packet saslData(Ber::Tag::OctetString, resp.begin(), resp.end());
+    response.appendChild(saslData);
+}
+
+} // namespace bind
+
+namespace Search {
+
 Request::Request(const Ber::Packet p) {
     // Basic sanity checks
     checkProtocolErrorTagMatches<Ldap::MessageTag>(Ldap::MessageTag::SearchRequest, p.tag);
@@ -141,7 +142,7 @@ Request::Request(const Ber::Packet p) {
     checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Boolean, p.children[5].tag);
     typesOnly = p.children[5];
 
-    filter = parseFilter(p.children[6]);
+    filter = Ldap::parseFilter(p.children[6]);
 
     checkProtocolErrorTagMatches<Ber::Tag>(Ber::Tag::Sequence, p.children[7].tag);
     for (const auto& a: p.children[7].children) {

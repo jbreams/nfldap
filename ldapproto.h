@@ -54,8 +54,6 @@ namespace Ldap {
         std::string errMsg,
         MessageTag tag);
 
-namespace Search {
-
     struct SubFilter {
         enum class Type { Initial, Any, Final } type;
         std::string value;
@@ -69,6 +67,12 @@ namespace Search {
         std::string attributeName;
     };
 
+    Filter parseFilter(const Ber::Packet& p);
+    Filter parseFilter(const std::string& p);
+
+namespace Search {
+
+
     struct Request {
         std::string base;
         enum class Scope { Base, One, Sub } scope;
@@ -76,7 +80,7 @@ namespace Search {
         int sizeLimit;
         int timeLimit;
         bool typesOnly;
-        Filter filter;
+        Ldap::Filter filter;
         std::vector<std::string> attributes;
 
         Request(const Ber::Packet p);

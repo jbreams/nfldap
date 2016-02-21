@@ -11,10 +11,12 @@
 #include <pthread.h>
 
 #include "loguru.hpp"
+
 #include "exceptions.h"
 #include "ldapproto.h"
 #include "storage.h"
 #include "passwords.h"
+#include "access.h"
 
 using asio::ip::tcp;
 YAML::Node config;
@@ -39,7 +41,7 @@ void session_thread(tcp::socket sock) {
         "mongodb://localhost",
         "directory",
         "rootdn",
-        "dc=mongodb,dc=com"
+        "accessControl"
     };
 
     bool noAuthentication = false;
@@ -250,9 +252,16 @@ void session_thread(tcp::socket sock) {
 int main(int argc, char** argv)
 {
     loguru::init(argc, argv);
+    Password::init();
+
+    config = YAML::LoadFile(argv[1]);
+
+    std::thread aclRefreshThread(
+        Ldap::Access::refreshThread,
+        std::ref(config)
+        );
     try
     {
-        config = YAML::LoadFile(argv[1]);
         asio::io_service io_service;
 
         int port = 3890;
@@ -272,6 +281,8 @@ int main(int argc, char** argv)
     {
         std::cerr << e.what() << std::endl;
     }
+
+    aclRefreshThread.join();
 
     return 0;
 }

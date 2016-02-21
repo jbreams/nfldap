@@ -24,6 +24,7 @@ std::string readPassword(const char* prompt) {
 }
 
 int main() {
+    Password::init();
     auto password = readPassword("Enter password: ");
     auto passwordCheck = readPassword("Re-enter password: ");
     if (password != passwordCheck) {

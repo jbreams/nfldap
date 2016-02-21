@@ -1,6 +1,10 @@
+#include <exception>
 #include <string>
 #include <iostream>
+#include <regex>
 #include <sstream>
+#include <unordered_map>
+#include <mutex>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/tokenizer.hpp>
@@ -10,6 +14,7 @@
 #include <mongocxx/instance.hpp>
 #include <mongocxx/uri.hpp>
 #include <mongocxx/exception/exception.hpp>
+#include <mongocxx/pipeline.hpp>
 
 #include <bsoncxx/builder/basic/array.hpp>
 #include <bsoncxx/builder/basic/document.hpp>
@@ -128,15 +133,21 @@ MongoBackend::MongoBackend(
     std::string connectURI,
     std::string db,
     std::string collection,
-    std::string rootDN
+    std::string aceCollection
 ) :
     _client { mongocxx::uri { connectURI } },
     _collection { _client[db][collection] },
-    _rootdn { rootDN }
+    _aceCollection { _client[db][aceCollection] }
 {}
 
 void MongoBackend::saveEntry(Ldap::Entry e, bool insert) {
     std::string dnId = dnPartsToId(dnToList(e.dn));
+
+    auto updateOpts = mongocxx::options::update();
+    updateOpts.upsert(true);
+
+    auto filterDoc = document{};
+    filterDoc.append(kvp("_id", dnId));
 
     auto updateDoc = document{};
     updateDoc.append(kvp("_id", dnId));
@@ -158,18 +169,30 @@ void MongoBackend::saveEntry(Ldap::Entry e, bool insert) {
         if (insert) {
             _collection.insert_one(updateDoc.view());
         } else {
-            auto opts = mongocxx::options::update();
-            opts.upsert(true);
-
-            auto filterDoc = document{};
-            filterDoc.append(kvp("_id", dnId));
-
-            _collection.replace_one(filterDoc.view(), updateDoc.view(), opts);
+            _collection.replace_one(filterDoc.view(), updateDoc.view(), updateOpts);
         }
     } catch (const mongocxx::exception) {
         LOG_S(ERROR) << "Error " << (insert ? "inserting" : "updating") << " document for "
             << "dn " << e.dn;
         throw Ldap::Exception(Ldap::ErrorCode::operationsError);
+    }
+
+    if (e.attributes.find("olcAccess") != e.attributes.end()) {
+        auto olcAccessDoc = document{};
+        olcAccessDoc.append(kvp("_id", dnId));
+        olcAccessDoc.append(kvp("olcAccess", [e](sub_array subArray) {
+            const auto valVector = e.attributes.at("olcAccess");
+            for (auto && attr: valVector) {
+                subArray.append(attr);
+            }
+        }));
+
+        try {
+            _aceCollection.replace_one(filterDoc.view(), olcAccessDoc.view(), updateOpts);
+        } catch(const mongocxx::exception) {
+            LOG_S(ERROR) << "Error updating entry in ACE collection for " << e.dn;
+            throw Ldap::Exception(Ldap::ErrorCode::operationsError);
+        }
     }
 }
 
@@ -213,8 +236,8 @@ std::unique_ptr<Ldap::Entry> MongoBackend::findEntry(std::string dn) {
     return e;
 }
 
-void processFilter(Ldap::Search::Filter filter, sub_document & searchDoc) {
-    using Type = Ldap::Search::Filter::Type;
+void processFilter(Ldap::Filter filter, sub_document & searchDoc) {
+    using Type = Ldap::Filter::Type;
     switch (filter.type) {
         case Type::And:
             searchDoc.append(kvp("$and", [filter](sub_array arr) {
@@ -243,7 +266,7 @@ void processFilter(Ldap::Search::Filter filter, sub_document & searchDoc) {
             searchDoc.append(kvp(filter.attributeName, filter.value));
             break;
         case Type::Sub: {
-            using SubType = Ldap::Search::SubFilter::Type;
+            using SubType = Ldap::SubFilter::Type;
             std::stringstream subBuffer;
             for (auto && c: filter.subChildren) {
                 switch(c.type) {
@@ -340,14 +363,37 @@ void MongoBackend::deleteEntry(std::string dn) {
     std::stringstream regexBuf;
 
     regexBuf << "^" << dnPartsToId(dnToList(dn)) << ",?.+";
+    auto regexStr = regexBuf.str();
 
-    searchDoc.append(kvp("_id", bsoncxx::types::b_regex{ regexBuf.str(), "" }));
+    searchDoc.append(kvp("_id", bsoncxx::types::b_regex{ regexStr, "" }));
     try {
         _collection.delete_many(searchDoc.view());
+        _aceCollection.delete_many(searchDoc.view());
     } catch (const mongocxx::exception& e) {
         LOG_S(ERROR) << "Error deleting sub-tree " << dn << ": " << e.what();
         throw Ldap::Exception(Ldap::ErrorCode::operationsError, e.what());
     }
+}
+
+void MongoBackend::aceIterator::refreshStr() {
+    bsoncxx::document::view resultDoc;
+    resultDoc = *_cursorIt;
+    curStr = std::string{ bsoncxx::stdx::string_view { resultDoc["olcAccess"].get_utf8() } };
+}
+
+MongoBackend::aceIterator MongoBackend::aceBegin() {
+    mongocxx::pipeline stages;
+    stages.unwind("$olcAccess");
+
+    _aceCursor = _aceCollection.aggregate(stages);
+    return aceIterator{ _aceCursor->begin() };
+}
+
+MongoBackend::aceIterator MongoBackend::aceEnd() {
+    if (!_aceCursor) {
+        throw std::logic_error("Cannot access ACE cursor that hasn't been initialized yet");
+    }
+    return aceIterator { _aceCursor->end() };
 }
 
 } // namespace Mongo

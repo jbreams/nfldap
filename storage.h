@@ -1,12 +1,18 @@
+#include <chrono>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+
+#include <boost/optional.hpp>
 
 #include <mongocxx/client.hpp>
 
 namespace Storage {
-
 namespace Mongo {
+
 class MongoCursor {
 public:
     class iterator;
@@ -46,7 +52,7 @@ private:
     friend class MongoCursor;
 
     void refreshDocument();
- 
+
     explicit iterator(mongocxx::cursor::iterator curs) :
         _cursorIt { std::move(curs) }
     {};
@@ -61,7 +67,7 @@ public:
         std::string connectURI,
         std::string db,
         std::string collection,
-        std::string rootDN
+        std::string aceCollection
     );
     ~MongoBackend() {};
 
@@ -73,12 +79,38 @@ public:
     std::unique_ptr<MongoCursor> findEntries(Ldap::Search::Request req);
     void deleteEntry(std::string dn);
 
+    class aceIterator;
+    aceIterator aceBegin();
+    aceIterator aceEnd();
 private:
-
     mongocxx::client _client;
     mongocxx::collection _collection;
-    std::string _rootdn;
+    mongocxx::collection _aceCollection;
 
+    boost::optional<mongocxx::cursor> _aceCursor;
+};
+
+class MongoBackend::aceIterator : public std::iterator<std::input_iterator_tag, std::string>
+{
+public:
+    ~aceIterator() {};
+    const std::string& operator*() { refreshStr(); return curStr; };
+    const std::string* operator->() { refreshStr(); return &curStr; };
+    aceIterator& operator++() { _cursorIt++; return *this; };
+    void operator++(int) { operator++(); };
+    bool operator==(const aceIterator& rhs) { return _cursorIt == rhs._cursorIt; };
+    bool operator!=(const aceIterator& rhs) { return _cursorIt != rhs._cursorIt; };
+
+private:
+    friend class MongoBackend;
+
+    explicit aceIterator(mongocxx::cursor::iterator curs) :
+        _cursorIt { std::move(curs) }
+    {};
+    void refreshStr();
+
+    std::string curStr;
+    mongocxx::cursor::iterator _cursorIt;
 };
 
 

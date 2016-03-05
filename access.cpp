@@ -7,9 +7,9 @@
 #include <boost/utility/string_ref.hpp>
 #include <boost/optional.hpp>
 
-#include "access.h"
 #include "exceptions.h"
 #include "ldapproto.h"
+#include "access.h"
 #include "storage.h"
 
 #include "loguru.hpp"
@@ -65,7 +65,7 @@ Entry::Entry(const std::string& str) {
             dn = boost::regex{ ss.str() };
         }
         else if(typeStr == "filter") {
-            filter = std::string{ valStr };
+            filter = Ldap::parseFilter(valStr);
         }
         else if(typeStr == "attrs") {
             using commaTokenizer = boost::tokenizer<boost::escaped_list_separator<char>>;
@@ -234,9 +234,25 @@ void refreshThread(YAML::Node& config) {
     }
 }
 
-EntryList getACLFor(std::string dn, std::string filter) {
+EntryList getACLFor(const std::string dn, const std::string filter) {
     EntryList ret;
 
+    std::lock_guard<std::mutex> lg(masterACLListMutex);
+    boost::optional<Ldap::Filter> filterCheck;
+    if (!filter.empty()) {
+        filterCheck = Ldap::parseFilter(filter);
+    }
+
+    for (auto && c: masterACLList) {
+        if (c->scope != Scope::Nothing && boost::regex_match(dn, c->dn)) {
+            auto wp = std::weak_ptr<Entry>(c);
+            ret.push_back(wp);
+        }
+        if (filterCheck && *filterCheck == c->filter) {
+            auto wp = std::weak_ptr<Entry>(c);
+            ret.push_back(wp);
+        }
+    }
 
     return ret;
 }

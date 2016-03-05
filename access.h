@@ -63,9 +63,9 @@ struct ACE {
 
 
 struct Entry {
+    Ldap::Filter filter;
     boost::regex dn;
-    std::string filter;
-    Scope scope;
+    Scope scope = Scope::Nothing;
     std::vector<std::string> attrs;
 
     std::vector<ACE> controls;

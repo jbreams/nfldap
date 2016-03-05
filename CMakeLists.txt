@@ -16,6 +16,7 @@ add_executable(nfldap
     access.cpp
     ber.cpp
     exceptions.cpp
+    filter.cpp
     ldapproto.cpp
     loguru.cpp
     main.cpp

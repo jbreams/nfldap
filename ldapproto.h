@@ -4,6 +4,8 @@
 #include <map>
 #include <iterator>
 
+#include <boost/utility/string_ref.hpp>
+
 #include "ber.h"
 
 namespace Ldap {
@@ -57,18 +59,59 @@ namespace Ldap {
     struct SubFilter {
         enum class Type { Initial, Any, Final } type;
         std::string value;
+
+        SubFilter(Type t, std::string v) :
+            type {t},
+            value { std::move(v) }
+        {}
     };
+    bool operator<(const SubFilter lhs, const SubFilter rhs);
+    bool operator==(const SubFilter lhs, const SubFilter rhs);
 
     struct Filter {
-        enum class Type { And, Or, Not, Eq, Sub, Gte, Lte, Present, Approx, Extensible } type;
-        std::vector<Filter> children;
-        std::vector<SubFilter> subChildren;
-        std::string value;
-        std::string attributeName;
+        enum class Type {
+            None, And, Or, Not, Eq, Sub, Gte, Lte, Present, Approx, Extensible
+        } type = Type::None;
+
+        Filter(Type t, std::string a) :
+            type { t },
+            attributeName { std::move(a) }
+        {}
+
+        Filter(Type t, std::string a, std::string v) :
+            type { t },
+            value { std::move(v) },
+            attributeName { std::move(a) }
+        {}
+
+        Filter(Type t, std::vector<Filter> c) :
+            type { t },
+            children { std::move(c) }
+        {}
+
+        Filter(std::string a, std::vector<SubFilter> c) :
+            type { Type::Sub },
+            subChildren { std::move(c) },
+            attributeName { std::move(a) }
+        {}
+
+        Filter() = default;
+
+        std::vector<Filter> children{};
+        std::vector<SubFilter> subChildren{};
+        std::string value = "";
+        std::string attributeName = "";
+
+        bool match(const Entry& e);
+
     };
 
     Filter parseFilter(const Ber::Packet& p);
     Filter parseFilter(const std::string& p);
+    Filter parseFilter(boost::string_ref p);
+    bool operator<(const Filter lhs, const Filter rhs);
+    bool operator==(const Filter lhs, const Filter rhs);
+
 
 namespace Search {
 

@@ -5,6 +5,7 @@
 #include <iterator>
 
 #include <boost/utility/string_ref.hpp>
+#include <boost/optional.hpp>
 
 #include "ber.h"
 
@@ -48,6 +49,31 @@ namespace Ldap {
         { }
 
         void appendValue(std::string name, std::string value);
+
+        boost::optional<std::vector<std::string>&> find(std::string key){
+            boost::optional<std::vector<std::string>&> ret;
+            auto it = attributes.find(key);
+            if (it == attributes.end())
+                return ret;
+            ret = it->second;
+            return ret;
+        }
+
+        std::map<std::string, std::vector<std::string>>::iterator begin() {
+            return attributes.begin();
+        }
+
+        std::map<std::string, std::vector<std::string>>::iterator end() {
+            return attributes.end();
+        }
+
+        std::map<std::string, std::vector<std::string>>::const_iterator cbegin() {
+            return attributes.cbegin();
+        }
+
+        std::map<std::string, std::vector<std::string>>::const_iterator cend() {
+            return attributes.cend();
+        }
     };
 
     Ber::Packet buildLdapResult(

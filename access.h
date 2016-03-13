@@ -1,6 +1,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <set>
 #include <tuple>
 
 #include <boost/tokenizer.hpp>
@@ -23,40 +24,44 @@ enum class Scope {
     Regex
 };
 
+enum class Level {
+    None,
+    Disclose,
+    Auth,
+    Compare,
+    Search,
+    Read,
+    SelfWrite,
+    Write,
+    Manage
+};
+
+enum class Target {
+    Nobody,
+    All,
+    Anonymous,
+    Users,
+    Self,
+    Dn,
+    DnAttr,
+    Group,
+};
+
+enum class Control {
+    Stop,
+    Continue,
+    Break
+};
+
 struct ACE {
-    enum class Target {
-        Nobody,
-        All,
-        Anonymous,
-        Users,
-        Self,
-        Dn,
-        DnAttr,
-        Group,
-    } target = Target::Nobody;
-
-    enum class Level {
-        None,
-        Disclose,
-        Auth,
-        Compare,
-        Search,
-        Read,
-        SelfWrite,
-        Write,
-        Manage
-    } level = Level::None;
-
-    enum class Control {
-        Stop,
-        Continue,
-        Break
-    } control = Control::Break;
+    Target target = Target::Nobody;
+    Level level = Level::None;
+    Control control = Control::Break;
 
     Scope scope = Scope::Nothing;
 
     boost::regex matchStr;
-    std::string groupObjectClass;
+    std::string groupDN;
     std::string attrName;
     ACE(tokenizer::iterator& cur, const tokenizer::iterator end);
 };
@@ -66,17 +71,14 @@ struct Entry {
     Ldap::Filter filter;
     boost::regex dn;
     Scope scope = Scope::Nothing;
-    std::vector<std::string> attrs;
+    std::set<std::string> attrs;
 
     std::vector<ACE> controls;
 
     Entry(const std::string& str);
 };
 
-using EntryList = std::vector<std::weak_ptr<Entry>>;
-
 void refreshThread(YAML::Node& config);
-EntryList getACLFor(std::string dn, std::string filter);
 
 } // namespace Access
 } // namespace Ldap

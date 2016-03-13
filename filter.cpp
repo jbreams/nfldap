@@ -8,6 +8,8 @@
 #include "exceptions.h"
 #include "ldapproto.h"
 
+#include "loguru.hpp"
+
 namespace Ldap {
 
 namespace {
@@ -50,12 +52,11 @@ std::vector<Filter> parseFilterList(
     auto curStart = start;
     curStart++;
     while (curStart != end) {
-        auto curEnd = curStart;
-        findRightParen(curEnd, end);
-        boost::string_ref subFilter = p.substr(curStart - p.begin(), curEnd - curStart);
+        boost::string_ref subFilter = p.substr(curStart - p.begin());
         filterList.push_back(parseFilter(subFilter));
-        curStart = curEnd;
-        curStart++;
+        findRightParen(++curStart, end);
+        while (curStart != end && *curStart != '(')
+            curStart++;
     }
 
     std::stable_sort(filterList.begin(), filterList.end());
@@ -79,6 +80,8 @@ Filter parseFilter(boost::string_ref p) {
                 "Search filter's parentheses aren't balanced");
     }
 
+    p.remove_prefix(std::distance(p.begin(), it));
+    p.remove_suffix(std::distance(rightParen, p.end()));
     std::vector<Filter> filterList;
 
     if (*it == '&') {
@@ -121,20 +124,35 @@ Filter parseFilter(boost::string_ref p) {
         if (type != Filter::Type::Eq) {
             attrName.remove_suffix(1);
         }
-        return Filter { Filter::Type::Eq, std::string{ attrName }, std::string{ valPart } };
+        return Filter { type, std::string{ attrName }, std::string{ valPart } };
     }
 
     std::vector<SubFilter> subMatches;
-    boost::char_separator<char> starSep("*");
+    boost::char_separator<char> starSep("", "*");
     tokenizer tokens(valPart, starSep);
-    for (auto p: tokens) {
-        subMatches.emplace_back(SubFilter::Type::Any, std::string{p});
-    }
-    if (subMatches.size() > 1) {
-        subMatches[0].type = SubFilter::Type::Initial;
-    }
-    if (subMatches.size() > 2) {
-        subMatches[subMatches.size() - 1].type = SubFilter::Type::Final;
+    bool lastWasStar = false;
+    for (auto it = tokens.begin(); it != tokens.end(); ++it) {
+        auto token = *it;
+        if (token == "*") {
+            lastWasStar = true;
+            continue;
+        }
+
+        bool nextIsStar = false;
+        auto peekIt = it;
+        if (++peekIt != tokens.end() && *peekIt == "*") {
+            nextIsStar = true;
+        }
+
+        if (lastWasStar) {
+            lastWasStar = false;
+            if (nextIsStar)
+                subMatches.emplace_back(SubFilter::Type::Any, token);
+            else
+                subMatches.emplace_back(SubFilter::Type::Final, token);
+        }
+        else
+            subMatches.emplace_back(SubFilter::Type::Initial, token);
     }
 
     return Filter { std::string{ attrName }, std::move(subMatches) };
